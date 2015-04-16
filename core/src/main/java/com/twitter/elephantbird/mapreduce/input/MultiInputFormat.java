@@ -3,6 +3,7 @@ package com.twitter.elephantbird.mapreduce.input;
 import java.io.IOException;
 import java.io.InputStream;
 
+import com.twitter.elephantbird.mapreduce.io.*;
 import com.twitter.elephantbird.util.HadoopCompat;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
@@ -16,10 +17,6 @@ import org.apache.hadoop.mapreduce.RecordReader;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.lib.input.FileSplit;
 
-import com.twitter.elephantbird.mapreduce.io.BinaryBlockReader;
-import com.twitter.elephantbird.mapreduce.io.BinaryWritable;
-import com.twitter.elephantbird.mapreduce.io.IdentityBinaryConverter;
-import com.twitter.elephantbird.mapreduce.io.RawBytesWritable;
 import com.twitter.elephantbird.util.HadoopUtils;
 import com.twitter.elephantbird.util.Protobufs;
 import com.twitter.elephantbird.util.TypeRef;
@@ -53,7 +50,8 @@ public class MultiInputFormat<M>
 
   private static enum Format {
     LZO_BLOCK,
-    LZO_B64LINE;
+    LZO_B64LINE,
+    LZO_NETSTRING;
   };
 
   /**
@@ -96,6 +94,8 @@ public class MultiInputFormat<M>
         return new LzoProtobufBlockRecordReader(typeRef);
       case LZO_B64LINE:
         return new LzoProtobufB64LineRecordReader(typeRef);
+      case LZO_NETSTRING:
+        return new LzoProtobufNetstringRecordReader(typeRef);
       }
     }
 
@@ -176,6 +176,15 @@ public class MultiInputFormat<M>
       throw new IOException("No codec for file " + file + " found");
     }
 
+    try {
+      if(checkNetstreamFormat(split, conf)) {
+        return Format.LZO_NETSTRING;
+      }
+    }
+    catch (IOException ex) {
+      // IGNORE
+    }
+
     InputStream in = file.getFileSystem(conf).open(file);
     InputStream lzoIn = null;
 
@@ -196,6 +205,60 @@ public class MultiInputFormat<M>
 
     // the check passed
     return Format.LZO_BLOCK;
+  }
+
+  private static boolean checkNetstreamFormat(InputSplit split,
+                                              Configuration conf) throws IOException {
+    FileSplit fileSplit = (FileSplit)split;
+
+    Path file = fileSplit.getPath();
+
+    /* we could have a an optional configuration that maps a regex on a
+     * file name to a format. E.g. ".*-block.lzo" to LZO_BLOCK file.
+     */
+
+    // most of the cost is opening the file and
+    // reading first lzo block (about 256k of uncompressed data)
+
+    CompressionCodec codec = new CompressionCodecFactory(conf).getCodec(file);
+    if (codec == null) {
+      throw new IOException("No codec for file " + file + " found");
+    }
+
+    InputStream in = file.getFileSystem(conf).open(file);
+    InputStream lzoIn = null;
+
+    // check if the file starts with magic bytes for Block storage format.
+    try {
+      lzoIn = codec.createInputStream(in);
+      int blockSize = readInt(lzoIn);
+      if(blockSize < 0) {
+        return false;
+      }
+
+      byte[] buff = new byte[blockSize + ProtobufNetstringBlockReader.SENTINEL.length];
+      IOUtils.readFully(lzoIn, buff, 0, blockSize);
+      for(int i = blockSize; i < buff.length; i++) {
+        if(buff[i] != ProtobufNetstringBlockReader.SENTINEL[i - blockSize]) {
+          return false;
+        }
+      }
+    } finally {
+      IOUtils.closeStream(lzoIn);
+      IOUtils.closeStream(in);
+    }
+
+    // the check passed
+    return true;
+  }
+
+  protected static int readInt(InputStream in) throws IOException {
+    int b = in.read();
+    if (b == -1) {
+      return -1;
+    }
+
+    return b | (in.read() << 8) | (in.read() << 16) | (in.read() << 24);
   }
 }
 

@@ -22,13 +22,13 @@ public abstract class BinaryBlockReader<M> {
   // though any type of objects can be stored, each block itself is
   // stored as a protocolbuf (SerializedBlock).
 
-  private InputStream in_;
-  private final StreamSearcher searcher_;
-  private final BinaryConverter<M> protoConverter_;
-  private List<ByteString> curBlobs_;
-  private int numLeftToReadThisBlock_ = 0;
-  private boolean readNewBlocks_ = true;
-  private boolean skipEmptyRecords = true; // skip any records of length zero
+  protected InputStream in_;
+  protected final StreamSearcher searcher_;
+  protected final BinaryConverter<M> protoConverter_;
+  protected List<ByteString> curBlobs_;
+  protected int numLeftToReadThisBlock_ = 0;
+  protected boolean readNewBlocks_ = true;
+  protected boolean skipEmptyRecords = true; // skip any records of length zero
 
   protected BinaryBlockReader(InputStream in, BinaryConverter<M> protoConverter) {
     this(in, protoConverter, true);
@@ -176,7 +176,7 @@ public abstract class BinaryBlockReader<M> {
     return true;
   }
 
-  private int readInt() throws IOException {
+  protected int readInt() throws IOException {
     int b = in_.read();
     if (b == -1) {
       return -1;
